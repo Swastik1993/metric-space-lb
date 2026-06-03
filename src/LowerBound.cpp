@@ -41,7 +41,7 @@ void compute_lb(vector<list<pair<unsigned int, double>> *> *adj_lst,
         }
         double val1 = adj_mat->at(i)->at(end1), val2 = adj_mat->at(i)->at(end2);
         double lb_val = abs(val1 - val2);
-        if (handles.at(end1).at(end2).node_->value.get_distance() < lb_val) {
+        if ((*handles.at(end1).at(end2)).get_distance() < lb_val) {
           H.increase(handles.at(end1).at(end2), path(end1, end2, lb_val));
         }
       }
@@ -68,7 +68,7 @@ void compute_lb(vector<list<pair<unsigned int, double>> *> *adj_lst,
                    max_end = max(end_point, edge.second);
       if (adj_mat->at(min_end)->at(max_end) < 0.) {
         double val = dist - it->second;
-        if (val > handles.at(min_end).at(max_end).node_->value.get_distance()) {
+        if (val > (*handles.at(min_end).at(max_end)).get_distance()) {
           H.increase(handles.at(min_end).at(max_end),
                      path(min_end, max_end, val));
         }
@@ -82,7 +82,7 @@ void compute_lb(vector<list<pair<unsigned int, double>> *> *adj_lst,
                    max_end = max(end_point, edge.first);
       if (adj_mat->at(min_end)->at(max_end) < 0.) {
         double val = dist - it->second;
-        if (val > handles.at(min_end).at(max_end).node_->value.get_distance()) {
+        if (val > (*handles.at(min_end).at(max_end)).get_distance()) {
           H.increase(handles.at(min_end).at(max_end),
                      path(min_end, max_end, val));
         }
@@ -93,7 +93,14 @@ void compute_lb(vector<list<pair<unsigned int, double>> *> *adj_lst,
 
 void SashaWang(vector<vector<double> *> *lb, vector<vector<double> *> *ub) {
   unsigned int nodes = lb->size();
+  // Floyd-Warshall-style triple loop: outer k is sequential (each k iteration
+  // depends on the previous's lb/ub values), but the inner (i, j) cell
+  // updates are independent of each other within the same k. Parallelize the
+  // inner pair via OpenMP if available; sequential semantics are unchanged.
   for (unsigned int k = 0; k < nodes; ++k) {
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) collapse(2)
+#endif
     for (unsigned int j = 0; j < nodes; ++j) {
       for (unsigned int i = 0; i < nodes; ++i) {
         double max_lb = max(lb->at(i)->at(k) - ub->at(k)->at(j),

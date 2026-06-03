@@ -1,11 +1,15 @@
 #include "ShortestPathTree.h"
 
 // Reconstruct the tree-edge weight to a node's parent.
-// In an SPT produced by Dijkstra: dist[node] = dist[parent] + w(parent,node)
+// Prefers the value stored at construction time (parent_edge_w); falls back
+// to the subtract-and-clamp pattern only if the stored value looks
+// uninitialized (defensive for non-Dijkstra-built SPTs).
 static inline double parent_edge_weight(const shortest_path_tree *node) {
   if (!node || !node->parent) return 0.0;
+  if (node->parent_edge_w > 0.0) return node->parent_edge_w;
+  // Legacy fallback (kept so existing in-memory trees built without setting
+  // parent_edge_w continue to work).
   double w = node->path_length - node->parent->path_length;
-  // numerical safety (should never be negative in exact arithmetic)
   return (w < 0.0 ? 0.0 : w);
 }
 
@@ -153,6 +157,13 @@ static RMQLCA *build_vertex_rmq(shortest_path_tree *root,
 }
 
 // Build DSU-based Cartesian tree over SPT edges; leaves are vertices.
+// Optimization note (#21, deferred): leaves carry weight=0 and only serve as
+// query targets. They could be elided by mapping vertex v to its lowest-
+// weight incident tree edge's CT node and rewriting find_LCA to start from
+// that internal node. That saves O(n) CTNode allocations and matching RMQ
+// Euler entries per SPT. The change touches the query path semantics, so
+// it's left as future work; current implementation explicitly creates
+// leaves to keep find_LCA logic identical to the original publication.
 static CartesianPreproc *build_cartesian_dsu(shortest_path_tree *root,
                                             vector<shortest_path_tree *> *sp_tree) {
   const int n = (int)sp_tree->size();
@@ -268,26 +279,33 @@ static CartesianPreproc *build_cartesian_dsu(shortest_path_tree *root,
   return cp;
 }
 
-void preprocess_spt_queries(vector<shortest_path_tree *> *sp_tree) {
+void preprocess_spt_lca_rmq(vector<shortest_path_tree *> *sp_tree) {
   if (!sp_tree || sp_tree->empty()) return;
-
-  // root is the only node with depth==0 for this tree
   shortest_path_tree *root = nullptr;
   for (auto *n : *sp_tree) {
-    if (n && n->depth == 0) {
-      root = n;
-      break;
-    }
+    if (n && n->depth == 0) { root = n; break; }
   }
   if (!root) return;
-
-  // avoid double-preprocessing
   if (root->rmq_vertex == nullptr) {
     root->rmq_vertex = build_vertex_rmq(root, sp_tree);
   }
+}
+
+void preprocess_spt_cartesian(vector<shortest_path_tree *> *sp_tree) {
+  if (!sp_tree || sp_tree->empty()) return;
+  shortest_path_tree *root = nullptr;
+  for (auto *n : *sp_tree) {
+    if (n && n->depth == 0) { root = n; break; }
+  }
+  if (!root) return;
   if (root->cartesian == nullptr) {
     root->cartesian = build_cartesian_dsu(root, sp_tree);
   }
+}
+
+void preprocess_spt_queries(vector<shortest_path_tree *> *sp_tree) {
+  preprocess_spt_lca_rmq(sp_tree);
+  preprocess_spt_cartesian(sp_tree);
 }
 
 // ==============================

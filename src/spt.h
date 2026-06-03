@@ -3,14 +3,18 @@
 #pragma once
 #include <vector>
 #include <utility>
+#include <unordered_map>
+#include <random>
+#include <cstddef>
+#include <limits>
 
 // ---------------- Graph ----------------
 
-struct Graph {
+struct SimpleGraph {
     int n;
     std::vector<std::vector<std::pair<int,double>>> adj;
 
-    Graph(int n = 0) : n(n), adj(n) {}
+    SimpleGraph(int n = 0) : n(n), adj(n) {}
 
     void addEdge(int u, int v, double w) {
         adj[u].push_back({v,w});
@@ -74,11 +78,20 @@ public:
 
     // Build SPT from graph using Dijkstra from this->root,
     // then build all auxiliary structures.
-    void buildFromGraph(const Graph &g);
+    void buildFromGraph(const SimpleGraph &g);
+
+    // Variant: build only the auxiliary structures needed by `method`.
+    // Saves preprocessing time and memory since each query uses exactly
+    // one refinement method. Falls back to the full build for HCA, which
+    // requires lifting + Euler-RMQ + downMax. Other methods are leaner.
+    void buildFromGraph(const SimpleGraph &g, RefineMethod method);
 
     // Re-root the existing SPT (seen as an unrooted tree) at newRoot.
     // Uses only (parent, parentEdgeW) of "base" and rebuilds all structures.
     static SPT reRootFrom(const SPT &base, int newRoot);
+
+    // Selective re-root: only builds structures needed by `method`.
+    static SPT reRootFrom(const SPT &base, int newRoot, RefineMethod method);
 
     // Max edge weight on the simple path u–v in this rooted tree
     // (for methods 1 and 2; NOT used by Cartesian)
@@ -101,6 +114,18 @@ public:
 private:
     // Helper: recompute all jump / ladder / Euler-RMQ structures and Method 3
     void rebuildStructures();
+
+    // Selective rebuild: only build the substructures needed by `method`.
+    void rebuildStructuresFor(RefineMethod method);
+
+    // Iterative Euler tour (drop-in for dfsEuler; safe on long paths). The
+    // recursive dfsEuler() is preserved for backward compatibility.
+    void buildEulerIterative();
+
+    // Iterative DSU-based Cartesian tree builder (alternative to the
+    // recursive O(n^2) buildCartesianRec). Same output structure; faster
+    // and stack-safe on degenerate trees.
+    void buildCartesianTreeDSU();
 
     // Euler tour + RMQ for LCA (on the rooted SPT)
     void dfsEuler(int node, int p, int d);
@@ -166,4 +191,47 @@ private:
 
 
 
+
+
+
+// ---------------- Stochastic greedy wrapper over SPT roots ----------------
+
+class SPT_StochasticGreedy {
+public:
+    SPT_StochasticGreedy(const SimpleGraph &g,
+                         unsigned int no_roots,
+                         unsigned int query_samples,
+                         unsigned int seed = 73);
+
+    void get_stochastic_roots(double eps,
+                              unsigned int cand_cap = std::numeric_limits<unsigned int>::max());
+    void get_exact_roots();
+
+    double lookup(unsigned int u, unsigned int v) const;
+    std::vector<double>* lookup_multiple(unsigned int u, unsigned int v) const;
+
+    size_t _sizeof() const;
+
+    const std::vector<int>& selected_roots() const { return root_order_; }
+
+private:
+    SimpleGraph g_;
+    unsigned int n_;
+    unsigned int no_roots_;
+    unsigned int query_samples_;
+    unsigned int seed_;
+
+    std::vector<std::pair<unsigned int, unsigned int>> train_queries_;
+    std::vector<double> current_best_;
+    std::vector<int> root_order_;
+
+    mutable std::unordered_map<int, SPT*> forest_;
+
+    void build_training_queries(std::mt19937 &rng);
+    std::vector<int> sample_candidate_roots(unsigned int count,
+                                            std::mt19937 &rng) const;
+    SPT* ensure_root(int r) const;
+    double marginal_gain_for_root(int r) const;
+    static bool contains_root(const std::vector<int> &roots, int r);
+};
 

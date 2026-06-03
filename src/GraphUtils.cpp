@@ -1,4 +1,5 @@
 #include "GraphUtils.h"
+#include "Dijkstra.h"
 #include <numbers>
 #include <algorithm> 
 
@@ -281,7 +282,7 @@ vector<list<pair<unsigned int, double>> *> *get_adj_list_file(char *filename) {
     ++edge_numbers;
     unsigned int u1 = min(u, v);
     unsigned int v1 = max(u, v);
-    cout << u1 << " " << v1 << endl;
+    // cout << u1 << " " << v1 << endl;
   }
   cout << "From read file" << edge_numbers << endl;
   return adj_list;
@@ -404,4 +405,87 @@ pair<Graph, vector<vector<double> *> *> waxman_graph(unsigned int n,
   }
   cout << "Total edges = " << total << endl;
   return make_pair(g, distance);
+}
+
+// ============================================================================
+// SplubCache implementation.
+// ============================================================================
+SplubCache::SplubCache(vector<list<pair<unsigned int, double>> *> *adj_lst)
+    : adj_lst_(adj_lst) {}
+
+SplubCache::~SplubCache() { clear(); }
+
+void SplubCache::clear() {
+  for (auto &kv : sp_cache_) delete kv.second;
+  sp_cache_.clear();
+}
+
+const vector<double>* SplubCache::ensure(unsigned int src) {
+  auto it = sp_cache_.find(src);
+  if (it != sp_cache_.end()) return it->second;
+  auto pr = DijkstraELM(adj_lst_, src);
+  // We don't need the longest-edge vector for SPLUB; free it.
+  if (pr.second) delete pr.second;
+  sp_cache_[src] = pr.first;
+  return pr.first;
+}
+
+void SplubCache::prewarm_all_parallel(unsigned int n) {
+  // Build per-source Dijkstras in parallel for every source not already in
+  // the cache. Each thread writes to its own slot in `built`; only the final
+  // merge into sp_cache_ touches the shared map, so we avoid unordered_map
+  // concurrency hazards.
+  std::vector<unsigned int> to_build;
+  to_build.reserve(n);
+  for (unsigned int r = 0; r < n; ++r) {
+    if (sp_cache_.find(r) == sp_cache_.end()) to_build.push_back(r);
+  }
+  std::vector<std::vector<double>*> built(to_build.size(), nullptr);
+  #pragma omp parallel for schedule(dynamic, 32) if (to_build.size() > 32)
+  for (long long i = 0; i < (long long)to_build.size(); ++i) {
+    auto pr = DijkstraELM(adj_lst_, to_build[i]);
+    if (pr.second) delete pr.second;
+    built[i] = pr.first;
+  }
+  // Sequential merge into the cache.
+  for (size_t i = 0; i < to_build.size(); ++i) {
+    sp_cache_[to_build[i]] = built[i];
+  }
+}
+
+double SplubCache::splub(unsigned int a, unsigned int b) {
+  if (a == b) return 0.0;
+  const vector<double> *spa = ensure(a);
+  const vector<double> *spb = ensure(b);
+  double lb = 0.0;
+  for (size_t i = 0; i < adj_lst_->size(); ++i) {
+    for (const auto &item : *adj_lst_->at(i)) {
+      unsigned int j = item.first;
+      double length = item.second;
+      double sp_ai = spa->at(i);
+      double sp_aj = spa->at(j);
+      double sp_bi = spb->at(i);
+      double sp_bj = spb->at(j);
+      lb = std::max(lb, length - sp_ai - sp_bj);
+      lb = std::max(lb, length - sp_aj - sp_bi);
+    }
+  }
+  return lb;
+}
+
+// ============================================================================
+// FlatMatrix builder (opt-in #17 utility).
+// ============================================================================
+FlatMatrix flat_matrix_from_vec_of_vec(vector<vector<double>*> *src,
+                                       double default_missing) {
+  if (!src || src->empty()) return FlatMatrix();
+  unsigned int n = (unsigned int)src->size();
+  FlatMatrix M(n, default_missing);
+  for (unsigned int i = 0; i < n; ++i) {
+    if (!src->at(i)) continue;
+    for (unsigned int j = 0; j < src->at(i)->size() && j < n; ++j) {
+      M(i, j) = src->at(i)->at(j);
+    }
+  }
+  return M;
 }
